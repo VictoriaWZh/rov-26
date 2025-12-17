@@ -1,8 +1,6 @@
-<img src="./logo.png" />
-
 # FastMJPG (README)
 
-**FastMJPG is a command line tool for capturing, sending, receiving, rendering, piping, and recording MJPG video with extremely low latency. It is optimized for running on constrained hardware and battery powered devices.**
+**FastMJPG is a command line tool for capturing, sending, receiving, rendering, piping, and recording MJPG video with extremely low latency. It is optimized for running on constrained hardware and battery powered devices,**
 
 It is written entirely in C, and leverages UDP for network transport, v4l2 for video capture, libturbojpeg for JPEG decoding, libglfw for OpenGL rendering, and ffmpeg for Matroska video packing.
 
@@ -20,11 +18,6 @@ It can be integrated directly into your C application as a library, piped to you
     + [Send (Output)](#send-output)
     + [Pipe (Output)](#pipe-output)
 + [Measuring Latency](#measuring-latency)
-+ [Author](#author)
-
-## Alpha Notice
-
-**FastMJPG is currently in a public alpha state. It is feature complete, and all known bugs have been fixed, though more issues are expected to be discovered as it is used by more people. It is not recommended for use in critical production environments at this time.**
 
 ## Install
 
@@ -32,10 +25,6 @@ It can be integrated directly into your C application as a library, piped to you
 # Install dependencies:
 sudo apt-get update
 sudo apt-get install git build-essential libturbojpeg0 libturbojpeg0-dev libglfw3-dev v4l-utils libavutil-dev libavcodec-dev libavformat-dev libswscale-dev
-
-# Clone:
-git clone git@github.com:adrianseeley/FastMJPG.git
-cd ./FastMJPG
 
 # Build:
 chmod +x ./build
@@ -208,7 +197,3 @@ All measurements are the amount of microseconds (not milliseconds) since the cap
 4. The measurements provided are a very rough approximation of the actual latency of the pipeline, and should serve only as an indicator to guide further investigation.
 5. The first step in any FastMJPG instance (`capture` or `receive`) has no capture timestamp to measure against when it starts, meaning the start and delta of those steps will not be tracked or printed.
 6. Each instance tracks it's own measurements, and does not communicate with other instances beyond the normally provided capture timestamp.
-
-## Author
-
-All code and documentation was written by Adrian Seeley, who can be reached by email: [FastMJPG@adrianseeley.com](mailto:FastMJPG@adrianseeley.com)
