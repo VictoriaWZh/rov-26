@@ -7,6 +7,8 @@ A lean MJPEG streaming tool for Linux. Captures video from V4L2 devices and stre
 - **Capture**: Read MJPEG frames from V4L2 video devices
 - **Send**: Transmit frames over UDP with automatic segmentation
 - **Receive**: Reassemble UDP packets into complete frames
+- **Record**: Save MJPEG stream to MKV file
+- **Pipe**: Write JPEG frames to file descriptor
 - **Profile**: Optional latency tracking with `--profile` flag
 
 ## Installation
@@ -15,7 +17,8 @@ A lean MJPEG streaming tool for Linux. Captures video from V4L2 devices and stre
 
 ```bash
 sudo apt-get update
-sudo apt-get install build-essential v4l-utils
+sudo apt-get install build-essential v4l-utils \
+    libavformat-dev libavcodec-dev libavutil-dev
 ```
 
 ### Build
@@ -77,6 +80,19 @@ mjpgo [--profile] [input] [outputs...]
 | JPEG_LEN | uint | `500000` | Max frame size |
 | ROUNDS | uint | `1` | Redundant sends per frame |
 
+**record** - Record to MKV file
+
+| Argument | Type | Example | Description |
+|----------|------|---------|-------------|
+| FILENAME | string | `output.mkv` | Output file path |
+
+**pipe** - Write JPEG frames to file descriptor
+
+| Argument | Type | Example | Description |
+|----------|------|---------|-------------|
+| FD | int | `3` | File descriptor number |
+| CHUNK_SIZE | uint | `4096` | Max bytes per write |
+
 ## Examples
 
 ### List Available Devices
@@ -98,7 +114,27 @@ mjpgo [--profile] [input] [outputs...]
 ./bin/mjpgo receive 0.0.0.0 5001 1400 500000 640 480 1 30
 ```
 
-### Capture with Profiling
+### Record to File
+
+```bash
+./bin/mjpgo capture /dev/video0 640 480 1 30 record output.mkv
+```
+
+### Pipe to Another Process
+
+```bash
+./bin/mjpgo capture /dev/video0 640 480 1 30 pipe 3 4096 3>&1 | your_app
+```
+
+### Multiple Outputs
+
+```bash
+./bin/mjpgo capture /dev/video0 640 480 1 30 \
+    send 0.0.0.0 5000 192.168.1.2 5001 1400 500000 1 \
+    record backup.mkv
+```
+
+### Profiling
 
 ```bash
 ./bin/mjpgo --profile capture /dev/video0 640 480 1 30 \
@@ -106,34 +142,26 @@ mjpgo [--profile] [input] [outputs...]
 # Press Ctrl+C to see latency stats
 ```
 
-### Chain: Receive and Forward
+## Pipe Protocol
 
-```bash
-./bin/mjpgo receive 0.0.0.0 5001 1400 500000 640 480 1 30 \
-    send 0.0.0.0 5002 192.168.1.3 5003 1400 500000 1
-```
-
-## Protocol
-
-mjpgo uses a custom UDP protocol for transmitting JPEG frames:
-
-### Packet Header (20 bytes)
+JPEG frames are written to the pipe with this header:
 
 | Offset | Size | Field | Description |
 |--------|------|-------|-------------|
-| 0 | 8 | `frame_ts_us` | Capture timestamp (microseconds, big-endian) |
+| 0 | 8 | `timestamp_us` | Capture timestamp (microseconds, big-endian) |
+| 8 | 4 | `data_len` | JPEG data length (big-endian) |
+| 12 | N | `data` | JPEG frame data |
+
+## UDP Protocol
+
+Packets use a 20-byte header:
+
+| Offset | Size | Field | Description |
+|--------|------|-------|-------------|
+| 0 | 8 | `frame_ts_us` | Capture timestamp (big-endian) |
 | 8 | 4 | `seg_idx` | Segment index (big-endian) |
 | 12 | 4 | `seg_count` | Total segments (big-endian) |
 | 16 | 4 | `payload_len` | Payload bytes (big-endian) |
-
-### Notes
-
-- Large JPEG frames are split into multiple UDP packets
-- Each packet contains a header + payload
-- Receiver reassembles using segment index
-- Timestamp enables latency measurement
-- PACKET_LEN should fit within network MTU (typically 1400-1472 bytes)
-- JPEG_LEN should exceed maximum expected frame size
 
 ## Profile Output
 
@@ -141,10 +169,10 @@ When using `--profile`, pressing Ctrl+C displays profiling statistics. e.g::
 
 ```
 --- Profiling Statistics ---
-Frames:     1000
 Duration:   33.45 seconds
 Average:    29.90 fps
 Latency:
   Average:  50345 us
   Min:      45823 us
   Max:      70521 us
+```

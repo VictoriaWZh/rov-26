@@ -2,6 +2,8 @@
 #include "../include/udp_sender.h"
 #include "../include/udp_receiver.h"
 #include "../include/video_capturer.h"
+#include "../include/frame_pipe.h"
+#include "../include/frame_recorder.h"
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -10,11 +12,15 @@
 
 #define MAX_OUTPUTS 8
 #define OUTPUT_TYPE_SEND 1
+#define OUTPUT_TYPE_RECORD 2
+#define OUTPUT_TYPE_PIPE 3
 
 typedef struct {
     int type;
     union {
         udp_sender_t* sender;
+        frame_recorder_t* recorder;
+        frame_pipe_t* pipe;
     } handle;
     uint32_t send_rounds;
 } output_slot_t;
@@ -47,12 +53,16 @@ static void print_usage(void) {
     printf("  capture DEVICE WIDTH HEIGHT FPS_NUM FPS_DEN\n");
     printf("  receive IP PORT PACKET_LEN JPEG_LEN WIDTH HEIGHT FPS_NUM FPS_DEN\n\n");
     printf("Output (at least one):\n");
-    printf("  send LOCAL_IP LOCAL_PORT REMOTE_IP REMOTE_PORT PACKET_LEN JPEG_LEN ROUNDS\n\n");
+    printf("  send LOCAL_IP LOCAL_PORT REMOTE_IP REMOTE_PORT PACKET_LEN JPEG_LEN ROUNDS\n");
+    printf("  record FILENAME\n");
+    printf("  pipe FD CHUNK_SIZE\n\n");
     printf("Commands:\n");
     printf("  help         Show this message\n");
     printf("  devices      List V4L2 devices with MJPEG support\n\n");
     printf("Examples:\n");
     printf("  mjpgo capture /dev/video0 640 480 1 30 send 0.0.0.0 5000 192.168.1.2 5001 1400 500000 1\n");
+    printf("  mjpgo capture /dev/video0 640 480 1 30 record output.mkv\n");
+    printf("  mjpgo capture /dev/video0 640 480 1 30 pipe 3 4096\n");
     printf("  mjpgo --profile receive 0.0.0.0 5001 1400 500000 640 480 1 30\n");
 }
 
@@ -98,6 +108,117 @@ static void update_profile(uint64_t frame_ts) {
     }
 }
 
+static void process_outputs(output_slot_t* outputs, int count, uint64_t ts,
+                           const void* jpeg, size_t jpeg_len) {
+    for (int i = 0; i < count; i++) {
+        switch (outputs[i].type) {
+            case OUTPUT_TYPE_SEND:
+                udp_sender_transmit(outputs[i].handle.sender, ts, jpeg, jpeg_len, outputs[i].send_rounds);
+                break;
+            case OUTPUT_TYPE_RECORD:
+                frame_recorder_write(outputs[i].handle.recorder, ts, jpeg, jpeg_len);
+                break;
+            case OUTPUT_TYPE_PIPE:
+                frame_pipe_write(outputs[i].handle.pipe, ts, jpeg, jpeg_len);
+                break;
+        }
+    }
+}
+
+static void cleanup_outputs(output_slot_t* outputs, int count) {
+    for (int i = 0; i < count; i++) {
+        switch (outputs[i].type) {
+            case OUTPUT_TYPE_SEND:
+                udp_sender_destroy(outputs[i].handle.sender);
+                break;
+            case OUTPUT_TYPE_RECORD:
+                frame_recorder_destroy(outputs[i].handle.recorder);
+                break;
+            case OUTPUT_TYPE_PIPE:
+                frame_pipe_destroy(outputs[i].handle.pipe);
+                break;
+        }
+    }
+}
+
+static int parse_outputs(int argc, char** argv, int start_arg, output_slot_t* outputs,
+                        int* out_count, uint32_t width, uint32_t height,
+                        uint32_t fps_num, uint32_t fps_den) {
+    int next_arg = start_arg;
+    int count = 0;
+    
+    while (next_arg < argc && count < MAX_OUTPUTS) {
+        if (strcmp(argv[next_arg], "send") == 0) {
+            if (argc < next_arg + 8) {
+                fprintf(stderr, "send requires: LOCAL_IP LOCAL_PORT REMOTE_IP REMOTE_PORT PACKET_LEN JPEG_LEN ROUNDS\n");
+                return -1;
+            }
+            
+            udp_sender_t* sender = udp_sender_create(
+                argv[next_arg + 1], atoi(argv[next_arg + 2]),
+                argv[next_arg + 3], atoi(argv[next_arg + 4]),
+                atoi(argv[next_arg + 5]), atoi(argv[next_arg + 6]));
+            
+            if (!sender) {
+                fprintf(stderr, "Failed to create sender\n");
+                return -1;
+            }
+            
+            outputs[count].type = OUTPUT_TYPE_SEND;
+            outputs[count].handle.sender = sender;
+            outputs[count].send_rounds = atoi(argv[next_arg + 7]);
+            count++;
+            next_arg += 8;
+            
+        } else if (strcmp(argv[next_arg], "record") == 0) {
+            if (argc < next_arg + 2) {
+                fprintf(stderr, "record requires: FILENAME\n");
+                return -1;
+            }
+            
+            frame_recorder_t* rec = frame_recorder_create(
+                argv[next_arg + 1], width, height, fps_num, fps_den);
+            
+            if (!rec) {
+                fprintf(stderr, "Failed to create recorder: %s\n", argv[next_arg + 1]);
+                return -1;
+            }
+            
+            outputs[count].type = OUTPUT_TYPE_RECORD;
+            outputs[count].handle.recorder = rec;
+            count++;
+            next_arg += 2;
+            
+        } else if (strcmp(argv[next_arg], "pipe") == 0) {
+            if (argc < next_arg + 3) {
+                fprintf(stderr, "pipe requires: FD CHUNK_SIZE\n");
+                return -1;
+            }
+            
+            int fd = atoi(argv[next_arg + 1]);
+            uint32_t chunk = atoi(argv[next_arg + 2]);
+            
+            frame_pipe_t* pipe = frame_pipe_create(fd, chunk);
+            if (!pipe) {
+                fprintf(stderr, "Failed to create pipe\n");
+                return -1;
+            }
+            
+            outputs[count].type = OUTPUT_TYPE_PIPE;
+            outputs[count].handle.pipe = pipe;
+            count++;
+            next_arg += 3;
+            
+        } else {
+            fprintf(stderr, "Unknown output: %s\n", argv[next_arg]);
+            return -1;
+        }
+    }
+    
+    *out_count = count;
+    return next_arg;
+}
+
 static int run_capture_pipeline(int argc, char** argv, int arg_start) {
     if (argc < arg_start + 5) {
         fprintf(stderr, "capture requires: DEVICE WIDTH HEIGHT FPS_NUM FPS_DEN\n");
@@ -109,7 +230,6 @@ static int run_capture_pipeline(int argc, char** argv, int arg_start) {
     uint32_t height = atoi(argv[arg_start + 2]);
     uint32_t fps_num = atoi(argv[arg_start + 3]);
     uint32_t fps_den = atoi(argv[arg_start + 4]);
-    int next_arg = arg_start + 5;
     
     video_capturer_t* cap = video_capturer_create(device, width, height, fps_num, fps_den);
     if (!cap) {
@@ -121,39 +241,11 @@ static int run_capture_pipeline(int argc, char** argv, int arg_start) {
     int output_count = 0;
     memset(outputs, 0, sizeof(outputs));
     
-    while (next_arg < argc && output_count < MAX_OUTPUTS) {
-        if (strcmp(argv[next_arg], "send") == 0) {
-            if (argc < next_arg + 8) {
-                fprintf(stderr, "send requires: LOCAL_IP LOCAL_PORT REMOTE_IP REMOTE_PORT PACKET_LEN JPEG_LEN ROUNDS\n");
-                video_capturer_destroy(cap);
-                return 1;
-            }
-            
-            const char* local_ip = argv[next_arg + 1];
-            uint16_t local_port = atoi(argv[next_arg + 2]);
-            const char* remote_ip = argv[next_arg + 3];
-            uint16_t remote_port = atoi(argv[next_arg + 4]);
-            uint32_t packet_len = atoi(argv[next_arg + 5]);
-            uint32_t jpeg_len = atoi(argv[next_arg + 6]);
-            uint32_t rounds = atoi(argv[next_arg + 7]);
-            
-            udp_sender_t* sender = udp_sender_create(local_ip, local_port, remote_ip, remote_port, packet_len, jpeg_len);
-            if (!sender) {
-                fprintf(stderr, "Failed to create sender\n");
-                video_capturer_destroy(cap);
-                return 1;
-            }
-            
-            outputs[output_count].type = OUTPUT_TYPE_SEND;
-            outputs[output_count].handle.sender = sender;
-            outputs[output_count].send_rounds = rounds;
-            output_count++;
-            next_arg += 8;
-        } else {
-            fprintf(stderr, "Unknown output: %s\n", argv[next_arg]);
-            video_capturer_destroy(cap);
-            return 1;
-        }
+    if (parse_outputs(argc, argv, arg_start + 5, outputs, &output_count,
+                     width, height, fps_num, fps_den) < 0) {
+        video_capturer_destroy(cap);
+        cleanup_outputs(outputs, output_count);
+        return 1;
     }
     
     if (output_count == 0) {
@@ -172,23 +264,11 @@ static int run_capture_pipeline(int argc, char** argv, int arg_start) {
         
         capture_buffer_t* buf = &cap->buffers[cap->active_index];
         update_profile(buf->timestamp_us);
-        
-        for (int i = 0; i < output_count; i++) {
-            if (outputs[i].type == OUTPUT_TYPE_SEND) {
-                udp_sender_transmit(outputs[i].handle.sender, buf->timestamp_us,
-                                   buf->data, buf->used, outputs[i].send_rounds);
-            }
-        }
-        
+        process_outputs(outputs, output_count, buf->timestamp_us, buf->data, buf->used);
         video_capturer_release_frame(cap);
     }
     
-    for (int i = 0; i < output_count; i++) {
-        if (outputs[i].type == OUTPUT_TYPE_SEND) {
-            udp_sender_destroy(outputs[i].handle.sender);
-        }
-    }
-    
+    cleanup_outputs(outputs, output_count);
     video_capturer_destroy(cap);
     print_profile_stats();
     return 0;
@@ -208,12 +288,6 @@ static int run_receive_pipeline(int argc, char** argv, int arg_start) {
     uint32_t height = atoi(argv[arg_start + 5]);
     uint32_t fps_num = atoi(argv[arg_start + 6]);
     uint32_t fps_den = atoi(argv[arg_start + 7]);
-    int next_arg = arg_start + 8;
-    
-    (void)width;
-    (void)height;
-    (void)fps_num;
-    (void)fps_den;
     
     udp_receiver_t* recv = udp_receiver_create(ip, port, packet_len, jpeg_len);
     if (!recv) {
@@ -225,39 +299,11 @@ static int run_receive_pipeline(int argc, char** argv, int arg_start) {
     int output_count = 0;
     memset(outputs, 0, sizeof(outputs));
     
-    while (next_arg < argc && output_count < MAX_OUTPUTS) {
-        if (strcmp(argv[next_arg], "send") == 0) {
-            if (argc < next_arg + 8) {
-                fprintf(stderr, "send requires: LOCAL_IP LOCAL_PORT REMOTE_IP REMOTE_PORT PACKET_LEN JPEG_LEN ROUNDS\n");
-                udp_receiver_destroy(recv);
-                return 1;
-            }
-            
-            const char* local_ip = argv[next_arg + 1];
-            uint16_t local_port = atoi(argv[next_arg + 2]);
-            const char* remote_ip = argv[next_arg + 3];
-            uint16_t remote_port = atoi(argv[next_arg + 4]);
-            uint32_t pkt_len = atoi(argv[next_arg + 5]);
-            uint32_t jpg_len = atoi(argv[next_arg + 6]);
-            uint32_t rounds = atoi(argv[next_arg + 7]);
-            
-            udp_sender_t* sender = udp_sender_create(local_ip, local_port, remote_ip, remote_port, pkt_len, jpg_len);
-            if (!sender) {
-                fprintf(stderr, "Failed to create sender\n");
-                udp_receiver_destroy(recv);
-                return 1;
-            }
-            
-            outputs[output_count].type = OUTPUT_TYPE_SEND;
-            outputs[output_count].handle.sender = sender;
-            outputs[output_count].send_rounds = rounds;
-            output_count++;
-            next_arg += 8;
-        } else {
-            fprintf(stderr, "Unknown output: %s\n", argv[next_arg]);
-            udp_receiver_destroy(recv);
-            return 1;
-        }
+    if (parse_outputs(argc, argv, arg_start + 8, outputs, &output_count,
+                     width, height, fps_num, fps_den) < 0) {
+        udp_receiver_destroy(recv);
+        cleanup_outputs(outputs, output_count);
+        return 1;
     }
     
     printf("Receiving on %s:%u\n", ip, port);
@@ -266,21 +312,10 @@ static int run_receive_pipeline(int argc, char** argv, int arg_start) {
         if (!udp_receiver_get_frame(recv)) break;
         
         update_profile(recv->frame_ts_us);
-        
-        for (int i = 0; i < output_count; i++) {
-            if (outputs[i].type == OUTPUT_TYPE_SEND) {
-                udp_sender_transmit(outputs[i].handle.sender, recv->frame_ts_us,
-                                   recv->frame_buf, recv->frame_len, outputs[i].send_rounds);
-            }
-        }
+        process_outputs(outputs, output_count, recv->frame_ts_us, recv->frame_buf, recv->frame_len);
     }
     
-    for (int i = 0; i < output_count; i++) {
-        if (outputs[i].type == OUTPUT_TYPE_SEND) {
-            udp_sender_destroy(outputs[i].handle.sender);
-        }
-    }
-    
+    cleanup_outputs(outputs, output_count);
     udp_receiver_destroy(recv);
     print_profile_stats();
     return 0;
