@@ -1,6 +1,6 @@
 # mjpgo
 
-A lightning fast MJPEG streaming tool for Linux. Captures video from V4L2 devices and streams over UDP.
+A lightning fast MJPEG streaming tool for Linux. Captures video from V4L2 devices and streams over UDP. Made for compute-constrained embedded devices.
 
 ## Features
 
@@ -181,7 +181,7 @@ Frames:     1000
 Duration:   33.45 seconds
 Average:    29.90 fps
 Latency:
-  Average:  3245 us
-  Min:      2823 us
-  Max:      5521 us
+  Average:  53245 us
+  Min:      28023 us
+  Max:      65521 us
 ```
