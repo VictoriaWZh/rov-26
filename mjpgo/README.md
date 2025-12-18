@@ -7,6 +7,7 @@ A lean MJPEG streaming tool for Linux. Captures video from V4L2 devices and stre
 - **Capture**: Read MJPEG frames from V4L2 video devices
 - **Send**: Transmit frames over UDP with automatic segmentation
 - **Receive**: Reassemble UDP packets into complete frames
+- **Render**: Display video in SDL2 window with hardware acceleration
 - **Record**: Save MJPEG stream to MKV file
 - **Pipe**: Write JPEG frames to file descriptor
 - **Profile**: Optional latency tracking with `--profile` flag
@@ -17,8 +18,8 @@ A lean MJPEG streaming tool for Linux. Captures video from V4L2 devices and stre
 
 ```bash
 sudo apt-get update
-sudo apt-get install build-essential v4l-utils \
-    libavformat-dev libavcodec-dev libavutil-dev
+sudo apt-get install build-essential v4l-utils libturbojpeg0-dev \
+    libavformat-dev libavcodec-dev libavutil-dev libsdl2-dev
 ```
 
 ### Build
@@ -68,6 +69,13 @@ mjpgo [--profile] [input] [outputs...]
 
 ### Output Options
 
+**render** - Display in SDL2 window
+
+| Argument | Type | Example | Description |
+|----------|------|---------|-------------|
+| WINDOW_WIDTH | uint | `1280` | Window width |
+| WINDOW_HEIGHT | uint | `720` | Window height |
+
 **send** - Send UDP stream
 
 | Argument | Type | Example | Description |
@@ -95,23 +103,24 @@ mjpgo [--profile] [input] [outputs...]
 
 ## Examples
 
-### List Available Devices
+### Display Camera Feed
 
 ```bash
-./bin/mjpgo devices
+./bin/mjpgo capture /dev/video0 640 480 1 30 render 1280 720
 ```
 
-### Capture and Send
+### Send and Display Locally
 
 ```bash
 ./bin/mjpgo capture /dev/video0 640 480 1 30 \
+    render 640 480 \
     send 0.0.0.0 5000 192.168.1.2 5001 1400 500000 1
 ```
 
-### Receive
+### Receive and Display
 
 ```bash
-./bin/mjpgo receive 0.0.0.0 5001 1400 500000 640 480 1 30
+./bin/mjpgo receive 0.0.0.0 5001 1400 500000 640 480 1 30 render 1280 720
 ```
 
 ### Record to File
@@ -120,16 +129,11 @@ mjpgo [--profile] [input] [outputs...]
 ./bin/mjpgo capture /dev/video0 640 480 1 30 record output.mkv
 ```
 
-### Pipe to Another Process
-
-```bash
-./bin/mjpgo capture /dev/video0 640 480 1 30 pipe 3 4096 3>&1 | your_app
-```
-
 ### Multiple Outputs
 
 ```bash
 ./bin/mjpgo capture /dev/video0 640 480 1 30 \
+    render 640 480 \
     send 0.0.0.0 5000 192.168.1.2 5001 1400 500000 1 \
     record backup.mkv
 ```
@@ -137,10 +141,14 @@ mjpgo [--profile] [input] [outputs...]
 ### Profiling
 
 ```bash
-./bin/mjpgo --profile capture /dev/video0 640 480 1 30 \
-    send 0.0.0.0 5000 192.168.1.2 5001 1400 500000 1
-# Press Ctrl+C to see latency stats
+./bin/mjpgo --profile capture /dev/video0 640 480 1 30 render 640 480
+# Close window or press Ctrl+C to see latency stats
 ```
+
+## Render Controls
+
+- **ESC** or **X button**: Close window and stop pipeline
+- **Window resize**: Video scales to fit
 
 ## Pipe Protocol
 
@@ -165,14 +173,15 @@ Packets use a 20-byte header:
 
 ## Profile Output
 
-When using `--profile`, pressing Ctrl+C displays profiling statistics. e.g::
+When using `--profile`, closing the window or pressing Ctrl+C displays:
 
 ```
 --- Profiling Statistics ---
+Frames:     1000
 Duration:   33.45 seconds
 Average:    29.90 fps
 Latency:
-  Average:  50345 us
-  Min:      45823 us
-  Max:      70521 us
+  Average:  3245 us
+  Min:      2823 us
+  Max:      5521 us
 ```

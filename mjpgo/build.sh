@@ -10,11 +10,12 @@ SRC_FILES="
     src/video_capturer.c
     src/frame_pipe.c
     src/frame_recorder.c
+    src/display_renderer.c
     src/mjpgo.c
 "
 
 CFLAGS="-Wall -Wextra -O2 -Iinclude"
-LDFLAGS="-lm -lavformat -lavcodec -lavutil"
+LDFLAGS="-lm -lturbojpeg -lavformat -lavcodec -lavutil -lSDL2"
 
 echo "Building mjpgo..."
 gcc $CFLAGS $SRC_FILES -o bin/mjpgo $LDFLAGS

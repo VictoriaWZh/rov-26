@@ -4,6 +4,7 @@
 #include "../include/video_capturer.h"
 #include "../include/frame_pipe.h"
 #include "../include/frame_recorder.h"
+#include "../include/display_renderer.h"
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -14,6 +15,7 @@
 #define OUTPUT_TYPE_SEND 1
 #define OUTPUT_TYPE_RECORD 2
 #define OUTPUT_TYPE_PIPE 3
+#define OUTPUT_TYPE_RENDER 4
 
 typedef struct {
     int type;
@@ -21,6 +23,7 @@ typedef struct {
         udp_sender_t* sender;
         frame_recorder_t* recorder;
         frame_pipe_t* pipe;
+        display_renderer_t* renderer;
     } handle;
     uint32_t send_rounds;
 } output_slot_t;
@@ -55,15 +58,15 @@ static void print_usage(void) {
     printf("Output (at least one):\n");
     printf("  send LOCAL_IP LOCAL_PORT REMOTE_IP REMOTE_PORT PACKET_LEN JPEG_LEN ROUNDS\n");
     printf("  record FILENAME\n");
-    printf("  pipe FD CHUNK_SIZE\n\n");
+    printf("  pipe FD CHUNK_SIZE\n");
+    printf("  render WINDOW_WIDTH WINDOW_HEIGHT\n\n");
     printf("Commands:\n");
     printf("  help         Show this message\n");
     printf("  devices      List V4L2 devices with MJPEG support\n\n");
     printf("Examples:\n");
+    printf("  mjpgo capture /dev/video0 640 480 1 30 render 1280 720\n");
     printf("  mjpgo capture /dev/video0 640 480 1 30 send 0.0.0.0 5000 192.168.1.2 5001 1400 500000 1\n");
-    printf("  mjpgo capture /dev/video0 640 480 1 30 record output.mkv\n");
-    printf("  mjpgo capture /dev/video0 640 480 1 30 pipe 3 4096\n");
-    printf("  mjpgo --profile receive 0.0.0.0 5001 1400 500000 640 480 1 30\n");
+    printf("  mjpgo receive 0.0.0.0 5001 1400 500000 640 480 1 30 render 1280 720\n");
 }
 
 static void print_profile_stats(void) {
@@ -108,6 +111,17 @@ static void update_profile(uint64_t frame_ts) {
     }
 }
 
+static bool check_renderer_open(output_slot_t* outputs, int count) {
+    for (int i = 0; i < count; i++) {
+        if (outputs[i].type == OUTPUT_TYPE_RENDER) {
+            if (!display_renderer_is_open(outputs[i].handle.renderer)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 static void process_outputs(output_slot_t* outputs, int count, uint64_t ts,
                            const void* jpeg, size_t jpeg_len) {
     for (int i = 0; i < count; i++) {
@@ -120,6 +134,9 @@ static void process_outputs(output_slot_t* outputs, int count, uint64_t ts,
                 break;
             case OUTPUT_TYPE_PIPE:
                 frame_pipe_write(outputs[i].handle.pipe, ts, jpeg, jpeg_len);
+                break;
+            case OUTPUT_TYPE_RENDER:
+                display_renderer_render(outputs[i].handle.renderer, jpeg, jpeg_len);
                 break;
         }
     }
@@ -137,15 +154,21 @@ static void cleanup_outputs(output_slot_t* outputs, int count) {
             case OUTPUT_TYPE_PIPE:
                 frame_pipe_destroy(outputs[i].handle.pipe);
                 break;
+            case OUTPUT_TYPE_RENDER:
+                display_renderer_destroy(outputs[i].handle.renderer);
+                break;
         }
     }
 }
 
 static int parse_outputs(int argc, char** argv, int start_arg, output_slot_t* outputs,
                         int* out_count, uint32_t width, uint32_t height,
-                        uint32_t fps_num, uint32_t fps_den) {
+                        uint32_t fps_num, uint32_t fps_den, const char* window_title) {
     int next_arg = start_arg;
     int count = 0;
+    
+    (void)fps_num;
+    (void)fps_den;
     
     while (next_arg < argc && count < MAX_OUTPUTS) {
         if (strcmp(argv[next_arg], "send") == 0) {
@@ -209,6 +232,26 @@ static int parse_outputs(int argc, char** argv, int start_arg, output_slot_t* ou
             count++;
             next_arg += 3;
             
+        } else if (strcmp(argv[next_arg], "render") == 0) {
+            if (argc < next_arg + 3) {
+                fprintf(stderr, "render requires: WINDOW_WIDTH WINDOW_HEIGHT\n");
+                return -1;
+            }
+            
+            uint32_t win_w = atoi(argv[next_arg + 1]);
+            uint32_t win_h = atoi(argv[next_arg + 2]);
+            
+            display_renderer_t* disp = display_renderer_create(width, height, win_w, win_h, window_title);
+            if (!disp) {
+                fprintf(stderr, "Failed to create renderer\n");
+                return -1;
+            }
+            
+            outputs[count].type = OUTPUT_TYPE_RENDER;
+            outputs[count].handle.renderer = disp;
+            count++;
+            next_arg += 3;
+            
         } else {
             fprintf(stderr, "Unknown output: %s\n", argv[next_arg]);
             return -1;
@@ -237,12 +280,15 @@ static int run_capture_pipeline(int argc, char** argv, int arg_start) {
         return 1;
     }
     
+    char title[256];
+    snprintf(title, sizeof(title), "mjpgo - %s %ux%u", device, width, height);
+    
     output_slot_t outputs[MAX_OUTPUTS];
     int output_count = 0;
     memset(outputs, 0, sizeof(outputs));
     
     if (parse_outputs(argc, argv, arg_start + 5, outputs, &output_count,
-                     width, height, fps_num, fps_den) < 0) {
+                     width, height, fps_num, fps_den, title) < 0) {
         video_capturer_destroy(cap);
         cleanup_outputs(outputs, output_count);
         return 1;
@@ -256,7 +302,7 @@ static int run_capture_pipeline(int argc, char** argv, int arg_start) {
     
     printf("Capturing from %s at %ux%u [%u/%u]\n", device, width, height, fps_num, fps_den);
     
-    while (running) {
+    while (running && check_renderer_open(outputs, output_count)) {
         if (video_capturer_grab_frame(cap) < 0) {
             fprintf(stderr, "Frame capture failed\n");
             break;
@@ -295,12 +341,15 @@ static int run_receive_pipeline(int argc, char** argv, int arg_start) {
         return 1;
     }
     
+    char title[256];
+    snprintf(title, sizeof(title), "mjpgo - %s:%u %ux%u", ip, port, width, height);
+    
     output_slot_t outputs[MAX_OUTPUTS];
     int output_count = 0;
     memset(outputs, 0, sizeof(outputs));
     
     if (parse_outputs(argc, argv, arg_start + 8, outputs, &output_count,
-                     width, height, fps_num, fps_den) < 0) {
+                     width, height, fps_num, fps_den, title) < 0) {
         udp_receiver_destroy(recv);
         cleanup_outputs(outputs, output_count);
         return 1;
@@ -308,7 +357,7 @@ static int run_receive_pipeline(int argc, char** argv, int arg_start) {
     
     printf("Receiving on %s:%u\n", ip, port);
     
-    while (running) {
+    while (running && check_renderer_open(outputs, output_count)) {
         if (!udp_receiver_get_frame(recv)) break;
         
         update_profile(recv->frame_ts_us);
