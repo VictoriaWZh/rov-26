@@ -44,7 +44,7 @@ display_renderer_t* display_renderer_create(uint32_t frame_width, uint32_t frame
     
     disp->renderer = SDL_CreateRenderer(
         disp->window, -1,
-        SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC
+        SDL_RENDERER_ACCELERATED
     );
     
     if (!disp->renderer) {

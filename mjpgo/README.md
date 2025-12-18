@@ -1,6 +1,6 @@
 # mjpgo
 
-A lean MJPEG streaming tool for Linux. Captures video from V4L2 devices and streams over UDP.
+A lightning fast MJPEG streaming tool for Linux. Captures video from V4L2 devices and streams over UDP.
 
 ## Features
 

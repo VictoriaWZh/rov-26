@@ -47,7 +47,7 @@ static void signal_handler(int sig) {
 }
 
 static void print_usage(void) {
-    printf("mjpgo - Lean MJPEG Streaming\n\n");
+    printf("mjpgo - Lightning Fast MJPEG Streaming\n\n");
     printf("Usage:\n");
     printf("  mjpgo [--profile] [input] [outputs...]\n\n");
     printf("Options:\n");
