@@ -1,0 +1,1 @@
+Run generate_dataset.py to get the train and val imgs
