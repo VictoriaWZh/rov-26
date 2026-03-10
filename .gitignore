@@ -1,2 +1,4 @@
 onboard/rpi/bin/*
 .venv/*
+images/
+masks/
