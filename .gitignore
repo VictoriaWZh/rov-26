@@ -2,3 +2,4 @@ onboard/rpi/bin/*
 .venv/*
 images/
 masks/
+images_old/

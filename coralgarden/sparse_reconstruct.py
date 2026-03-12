@@ -1,6 +1,3 @@
-# reconstruct_colmap.py
-# Sparse-only COLMAP pipeline (CPU-friendly) for downscaled images.
-
 import argparse
 import os
 import shutil
@@ -8,26 +5,20 @@ import subprocess
 from pathlib import Path
 
 
-def find_colmap() -> str:
-    # 1) normal PATH
+def find_colmap():
+    # normal PATH
     p = shutil.which("colmap")
     if p:
         return p
 
-    # 2) common conda location on Windows
+    # common conda location fr Windows
     conda_prefix = os.environ.get("CONDA_PREFIX")
     if conda_prefix:
         candidate = os.path.join(conda_prefix, "Library", "bin", "colmap.exe")
         if os.path.exists(candidate):
             return candidate
 
-    raise FileNotFoundError(
-        "COLMAP executable not found.\n"
-        "Try:\n"
-        "  conda install -c conda-forge colmap -y\n"
-        "Then verify with:\n"
-        "  colmap -h\n"
-    )
+    raise FileNotFoundError("COLMAP not found.")
 
 
 COLMAP = find_colmap()
@@ -51,15 +42,8 @@ def pick_model_folder(sparse_dir: Path) -> Path:
     return sorted(candidates, key=lambda p: int(p.name))[0]
 
 
-def reconstruct_sparse_only(
-    images_dir: Path,
-    out_dir: Path,
-    matcher: str = "sequential",   # "sequential" | "exhaustive"
-    single_camera: bool = True,
-    num_threads: int = 4,
-    max_num_features: int = 4096,
-    sequential_overlap: int = 8,
-) -> None:
+def reconstruct_sparse_only(images_dir, out_dir, matcher="sequential", # exhaustive is other option
+    single_camera=True, num_threads=4, max_num_features=4096, sequential_overlap=8):
     images_dir = images_dir.resolve()
     out_dir = out_dir.resolve()
 
@@ -71,12 +55,7 @@ def reconstruct_sparse_only(
     sparse_dir = out_dir / "sparse"
     sparse_dir.mkdir(exist_ok=True)
 
-    # 0) (Optional) If you re-run often, start fresh to avoid mixing settings
-    # Comment these two lines out if you want to resume.
-    if db_path.exists():
-        db_path.unlink()
-
-    # 1) Feature extraction (CPU-only, lighter settings)
+    # Feature extraction w CPU only
     run([
         "colmap", "feature_extractor",
         "--database_path", str(db_path),
@@ -84,17 +63,17 @@ def reconstruct_sparse_only(
 
         "--ImageReader.single_camera", "1" if single_camera else "0",
 
-        # CPU-only (you have no NVIDIA GPU)
+        # CPU-only
         "--FeatureExtraction.use_gpu", "0",
 
-        # Keep your PC responsive
+        # Keep PC responsive
         "--FeatureExtraction.num_threads", str(num_threads),
 
-        # Limit features to speed up (good for 353 building images)
+        # Limit features to speed up
         "--SiftExtraction.max_num_features", str(max_num_features),
     ])
 
-    # 2) Matching (CPU-only)
+    # 2) Matching w CPU only
     if matcher == "sequential":
         run([
             "colmap", "sequential_matcher",
@@ -125,8 +104,7 @@ def reconstruct_sparse_only(
     ])
 
     model_dir = pick_model_folder(sparse_dir)
-    print(f"\n✅ Sparse model created at: {model_dir}")
-    print("You should see cameras.bin / images.bin / points3D.bin in that folder.")
+    print(f"\nSparse model created at: {model_dir}")
 
 
 def main():
@@ -134,8 +112,8 @@ def main():
     parser.add_argument("--images", type=str, required=True, help="Folder of (downscaled) images.")
     parser.add_argument("--out", type=str, default="recon", help="Output folder (default: recon).")
     parser.add_argument("--matcher", type=str, default="sequential", choices=["sequential", "exhaustive"])
-    parser.add_argument("--multi_camera", action="store_true",
-                        help="Set if images come from multiple cameras/lenses (disables single_camera).")
+    # parser.add_argument("--multi_camera", action="store_true",
+    #                     help="Set if images come from multiple cameras/lenses (disables single_camera).")
 
     # Performance knobs (defaults are good for your dataset)
     parser.add_argument("--threads", type=int, default=4, help="CPU threads to use (2–6 recommended).")

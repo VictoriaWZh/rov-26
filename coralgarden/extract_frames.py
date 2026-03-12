@@ -9,7 +9,7 @@ def extract_frames_evenly(n: int,
                           images_dir: str | None = None) -> list[str]:
 
     if n < 1:
-        raise ValueError("`n` must be >= 1")
+        raise ValueError("n must be >= 1")
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     if data_dir is None:

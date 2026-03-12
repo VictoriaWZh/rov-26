@@ -42,7 +42,7 @@ def main():
         vis.destroy_window()
         
         if len(picked) < 2:
-            print(f"\n⚠ Only {len(picked)} point(s) picked. Need 2 points.")
+            print(f"\n!! Only {len(picked)} point(s) picked. Need 2 points.")
             retry = input("Try again? (y/n): ").strip().lower()
             if retry != 'y':
                 break
